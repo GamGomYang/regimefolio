@@ -163,5 +163,3 @@ macOS 자동 실행 설치:
 ---
 
 전략: [David Varadi — Inflation Compass](https://cssanalytics.wordpress.com/2026/07/27/the-inflation-compass-model/) · 데이터: Yahoo Finance / FRED T5YIE
-
-기존 공개 코드를 수정·확장한 프로젝트입니다. [기반 코드 출처 상태](docs/usage.md#출처)를 별도로 기록합니다.
