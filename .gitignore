@@ -1,0 +1,43 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.vscode/
+.idea/
+.DS_Store
+
+# Local agent configuration and environment-specific symlinks
+/.agents/
+/.claude/
+
+# Runtime databases, backups, and job locks
+/data/*.db
+/data/*.db-*
+/data/*.sqlite
+/data/*.sqlite-*
+/data/*.sqlite3
+/data/*.sqlite3-*
+/data/backups/
+/data/.daily_job.lock/
+
+# Runtime logs and generated experiment output
+*.log
+/logs/*
+!/logs/.gitkeep
+/results/
+/backtest_report.txt
+
+# Keep portfolio charts, screenshots, summary.md, and development log.txt tracked.
