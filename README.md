@@ -54,38 +54,41 @@ $B_t$는 T5YIE, 즉 채권시장에서 관측한 5년 기대인플레이션율�
 
 $$
 I_t=\mathbf{1}[B_t>2.0]\;\land\;
-\left(\mathbf{1}[B_t>B_{t-60}]\;\lor\;\mathbf{1}[\hat\beta_t>0]\right)
+\left(\mathbf{1}[B_t>B_{t-60}]\;\lor\;\mathbf{1}[\hat{\beta}_t>0]\right)
 $$
 
 **2% 초과**를 기본 조건으로 두고, 기대인플레이션의 60거래일 변화 또는 섹터 확인 지표의 기울기 중 하나가 양수이면 `ON`입니다.
 기대인플레이션 수준과 시장의 움직임을 함께 반영하는 구조입니다.
 
-<details>
-<summary><strong>섹터 확인 지표와 회귀 기울기 수식</strong></summary>
+#### 섹터 확인 지표와 회귀 기울기
 
 각 ETF의 일별 수정종가 수익률을 $r_{i,t}$라고 하면 두 바스켓을 다음과 같이 구성합니다.
 
 $$
-r_t^+=\frac12r_{\mathrm{XLE},t}+\frac16\left(r_{\mathrm{XLI},t}+r_{\mathrm{XLF},t}+r_{\mathrm{XLB},t}\right)
+r_t^+=\frac{1}{2}r_{\mathrm{XLE},t}+\frac{1}{6}\left(r_{\mathrm{XLI},t}+r_{\mathrm{XLF},t}+r_{\mathrm{XLB},t}\right)
 $$
 
 $$
-r_t^-=\frac13\left(r_{\mathrm{XLU},t}+r_{\mathrm{XLV},t}+r_{\mathrm{XLP},t}\right),
-\qquad C_t=\frac{\prod_{s\le t}(1+r_s^+)}{\prod_{s\le t}(1+r_s^-)}
+r_t^-=\frac{1}{3}\left(r_{\mathrm{XLU},t}+r_{\mathrm{XLV},t}+r_{\mathrm{XLP},t}\right)
+$$
+
+두 바스켓의 누적 성장 비율을 확인 지표로 사용합니다.
+
+$$
+C_t=\frac{\prod_{s\le t}(1+r_s^+)}{\prod_{s\le t}(1+r_s^-)}
 $$
 
 $C_t$가 상승하면 에너지·산업재·금융·소재 바스켓이 방어 섹터 바스켓보다 강하다는 뜻입니다.
 최근 60개 값에 직선을 맞추어 기울기를 계산합니다.
 
 $$
-\hat\beta_t=
-\frac{\sum_{j=0}^{59}(j-\bar j)(C_{t-59+j}-\bar C_t)}
-{\sum_{j=0}^{59}(j-\bar j)^2}
+\hat{\beta}_t=
+\frac{\sum_{j=0}^{59}(j-\bar{j})(C_{t-59+j}-\bar{C}_t)}
+{\sum_{j=0}^{59}(j-\bar{j})^2}
 $$
 
-$\bar j=29.5$, $\bar C_t$는 해당 60개 값의 평균입니다. 필요한 관측치가 확보된 구간에서만 신호를 사용합니다.
+$\bar{j}=29.5$, $\bar{C}_t$는 해당 60개 값의 평균입니다. 필요한 관측치가 확보된 구간에서만 신호를 사용합니다.
 
-</details>
 
 ### 3. 월말 — 신호를 목표 포지션으로 바꾸기
 
