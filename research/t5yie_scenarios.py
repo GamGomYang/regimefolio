@@ -11,7 +11,7 @@ import pandas as pd
 import backtest as base
 
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "results"
 TRADING_COST_BPS = (0, 5, 10, 30)
 

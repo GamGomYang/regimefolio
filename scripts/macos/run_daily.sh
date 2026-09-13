@@ -2,7 +2,7 @@
 
 set -eu
 
-PROJECT_DIR="/Users/gamgomyang/vscode/regimefolio"
+PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 LOCK_DIR="$PROJECT_DIR/data/.daily_job.lock"
 
 mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/data/backups"

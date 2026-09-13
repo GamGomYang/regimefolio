@@ -6,15 +6,15 @@
     <string>com.inflation-compass.daily</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/gamgomyang/vscode/regimefolio/launch_daily.sh</string>
+        <string>__PROJECT_DIR__/scripts/macos/run_daily.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>StartInterval</key>
     <integer>7200</integer>
     <key>StandardOutPath</key>
-    <string>/Users/gamgomyang/vscode/regimefolio/logs/daily_job.log</string>
+    <string>__PROJECT_DIR__/logs/daily_job.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/gamgomyang/vscode/regimefolio/logs/daily_job_error.log</string>
+    <string>__PROJECT_DIR__/logs/daily_job_error.log</string>
 </dict>
 </plist>

@@ -21,7 +21,7 @@
 ## 폴더 구성
 
 - `screenshots/`: 실제 웹 화면 캡처. 루트 README에서 사용합니다.
-- `charts/`: `plot_results.py`로 생성하는 백테스트 차트.
+- `charts/`: `scripts/plot_results.py`로 생성하는 백테스트 차트.
 
 | 차트 | 내용 |
 |---|---|
@@ -29,5 +29,5 @@
 | [portfolio-weights.png](charts/portfolio-weights.png) | 일별 ETF 비중 |
 | [relative-performance.png](charts/relative-performance.png) | SPY 대비 상대성과와 상대낙폭 |
 
-저장소 루트에서 `python plot_results.py`를 실행하면 기존 DB의 백테스트 결과로 `charts/`의 세 파일을 갱신합니다.
+저장소 루트에서 `python -m scripts.plot_results`를 실행하면 기존 DB의 백테스트 결과로 `charts/`의 세 파일을 갱신합니다.
 파일명은 영문 소문자와 하이픈을 사용합니다.

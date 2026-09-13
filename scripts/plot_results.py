@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import pandas as pd
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DB_PATH = DATA_DIR / "inflation_compass.db"
-OUT_DIR = Path(__file__).parent / "docs" / "images" / "charts"
+OUT_DIR = Path(__file__).resolve().parents[1] / "docs" / "images" / "charts"
 
 SURFACE = "#fcfcfb"
 INK_PRIMARY = "#0b0b0b"

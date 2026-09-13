@@ -40,4 +40,9 @@ htmlcov/
 /results/
 /backtest_report.txt
 
-# Keep portfolio charts, screenshots, summary.md, and development log.txt tracked.
+# Personal notes and legacy local reports
+/.local/
+/log.txt
+/summary.md
+
+# Keep portfolio charts and screenshots tracked.

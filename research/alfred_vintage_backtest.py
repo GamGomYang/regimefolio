@@ -11,11 +11,11 @@ import pandas as pd
 import requests
 
 import backtest as base
-import t5yie_scenarios as exp
+from research import t5yie_scenarios as exp
 
 
 FIRST_RELEASE = pd.Timestamp("2014-01-27")
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "results"
 URL = "https://alfred.stlouisfed.org/graph/alfredgraph.csv?id=T5YIE&vintage_date={date}"
 
