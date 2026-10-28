@@ -44,7 +44,7 @@ def test_end_to_end_live_job_is_idempotent(tmp_path):
     live_core.set_setting(conn, "initial_capital", "1000")
     conn.close()
 
-    assert daily_job.run(db, skip_fetch=True) == 0
+    assert daily_job.run(db, skip_fetch=True, now="2025-03-31T21:00:00Z") == 0
     conn = live_core.connect(db)
     signal_count = conn.execute("SELECT count(*) FROM live_signal_snapshots").fetchone()[0]
     month_end_count = conn.execute(
@@ -56,7 +56,7 @@ def test_end_to_end_live_job_is_idempotent(tmp_path):
     assert portfolios == {"shadow", "spy"}
     assert conn.execute("SELECT status FROM live_runs ORDER BY run_id DESC").fetchone()[0] == "SUCCESS"
 
-    assert daily_job.run(db, skip_fetch=True) == 0
+    assert daily_job.run(db, skip_fetch=True, now="2025-03-31T21:00:00Z") == 0
     assert conn.execute("SELECT count(*) FROM live_signal_snapshots").fetchone()[0] == signal_count
 
     signal_date, weights_json = conn.execute(
@@ -88,7 +88,7 @@ def test_market_validation_blocks_missing_latest_ticker(tmp_path):
     conn.commit()
     conn.close()
     try:
-        daily_job.run(db, skip_fetch=True)
+        daily_job.run(db, skip_fetch=True, now="2025-03-31T21:00:00Z")
         assert False, "job should fail on an incomplete latest day"
     except RuntimeError as exc:
         assert "Missing latest prices" in str(exc)

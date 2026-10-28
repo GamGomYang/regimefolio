@@ -46,3 +46,54 @@ htmlcov/
 /summary.md
 
 # Keep portfolio charts and screenshots tracked.
+
+# Credentials and local authentication material (never commit real values)
+.envrc
+.envrc.*
+*.env
+*.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+credentials*.json
+credentials*.yaml
+credentials*.yml
+client_secret*.json
+service-account*.json
+service_account*.json
+secrets.json
+secrets.yaml
+secrets.yml
+secrets.toml
+/secrets/
+/credentials/
+/.private/
+
+# Account evidence and exports; keep these outside the source tree when possible
+baseline*.json
+cash-evidence*.json
+movements*.json
+settlements*.json
+receipt*.json
+/statements/
+/receipts/
+/data/accounts/
+/data/statements/
+/data/receipts/
+/data/exports/
+
+# Runtime DBs/backups can be placed anywhere by CLI --db / --output
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.dump
+*.backup
+*.bak
+*.har

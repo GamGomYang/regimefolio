@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
-import traceback
 
 import pandas as pd
 
@@ -23,7 +22,7 @@ def refresh_market(conn, force=False):
     return prices.index.max() if not prices.empty else pd.Timestamp(last)
 
 
-def run(db_path=live_core.DEFAULT_DB, skip_fetch=False):
+def run(db_path=live_core.DEFAULT_DB, skip_fetch=False, now=None):
     conn = live_core.connect(db_path)
     live_core.initialize(conn)
     started = pd.Timestamp.now(tz="UTC").isoformat()
@@ -34,16 +33,17 @@ def run(db_path=live_core.DEFAULT_DB, skip_fetch=False):
     try:
         if not skip_fetch:
             refresh_market(conn)
-        issues = live_core.validate_market(conn)
-        now = pd.Timestamp.now(tz="UTC").isoformat()
+        issues = live_core.validate_market(conn, now=now)
+        detected_at = pd.Timestamp.now(tz="UTC").isoformat()
         for severity, category, message in issues:
             conn.execute(
                 "INSERT INTO live_data_issues(detected_at,severity,category,message) VALUES(?,?,?,?)",
-                (now, severity, category, message),
+                (detected_at, severity, category, message),
             )
+        conn.commit()
         if any(i[0] == "ERROR" for i in issues):
             raise RuntimeError("; ".join(i[2] for i in issues))
-        inserted = live_core.freeze_signals(conn)
+        inserted = live_core.freeze_signals(conn, now=now)
         live_core.rebuild_shadow_and_benchmark(conn)
         live_core.rebuild_live_nav(conn)
         latest_price = conn.execute("SELECT max(date) FROM prices").fetchone()[0]
@@ -57,9 +57,10 @@ def run(db_path=live_core.DEFAULT_DB, skip_fetch=False):
         live_core.backup_database(conn, db_path)
         return 0
     except Exception as exc:
+        conn.rollback()
         conn.execute(
             "UPDATE live_runs SET finished_at=?,status='FAILED',message=? WHERE run_id=?",
-            (pd.Timestamp.now(tz="UTC").isoformat(), f"{exc}\n{traceback.format_exc()}", run_id),
+            (pd.Timestamp.now(tz="UTC").isoformat(), f"Job failed: {type(exc).__name__}; inspect data validation issues", run_id),
         )
         conn.commit()
         raise

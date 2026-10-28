@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Seoul",
+  "command": ".venv/bin/python -m pytest -q",
+  "tests": 182,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "by_module": {
+    "tests.test_execution_cli": 3,
+    "tests.test_execution_crash_concurrency": 4,
+    "tests.test_execution_ledger": 23,
+    "tests.test_execution_service": 22,
+    "tests.test_live_blackbox": 2,
+    "tests.test_live_ui": 1,
+    "tests.test_order_engine": 41,
+    "tests.test_order_stream": 11,
+    "tests.test_read_model": 10,
+    "tests.test_safety_regressions": 33,
+    "tests.test_toss_client": 32
+  },
+  "targeted_mutations": {
+    "detected": 10,
+    "total": 10
+  },
+  "concurrency": {
+    "processes": 4,
+    "independent_scenarios": 100,
+    "remote_create_requests": 100,
+    "duplicate_orders": 0
+  },
+  "event_permutations": {
+    "seed": 20261027,
+    "scenarios": 1000
+  },
+  "forced_exit_boundaries": [
+    "before_send",
+    "after_remote_acceptance",
+    "after_ack_commit"
+  ],
+  "compileall": "passed",
+  "git_diff_check": "passed",
+  "live_account_requests_executed": false,
+  "live_order_requests_executed": false,
+  "live_websocket_connected": false,
+  "production_writes_default_enabled": false,
+  "production_readiness": "NO_GO_PENDING_LIVE_EVIDENCE_AND_CONTRACT_VALIDATION"
+}

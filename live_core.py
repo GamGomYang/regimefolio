@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from contextlib import contextmanager
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 import backtest as strategy
+from safety import SafetyError, decimal, utc
 
 
 ROOT = Path(__file__).parent
@@ -93,6 +96,20 @@ def connect(db_path=DEFAULT_DB):
 
 def initialize(conn):
     conn.executescript(LIVE_SCHEMA)
+    # Additive migrations preserve legacy manual records; never promote them to broker fills.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(live_trades)")}
+    if "request_key" not in columns:
+        conn.execute("ALTER TABLE live_trades ADD COLUMN request_key TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS manual_request_key ON live_trades(request_key)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS signal_provenance (
+        signal_date TEXT PRIMARY KEY, input_hash TEXT NOT NULL, fred_observed_date TEXT,
+        confirmed_at TEXT NOT NULL, code_version TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS signal_revisions (
+        signal_date TEXT NOT NULL, input_hash TEXT NOT NULL, detected_at TEXT NOT NULL,
+        PRIMARY KEY(signal_date,input_hash))""")
+    nav_columns = {r[1] for r in conn.execute("PRAGMA table_info(live_daily_nav)")}
+    if "valuation_status" not in nav_columns:
+        conn.execute("ALTER TABLE live_daily_nav ADD COLUMN valuation_status TEXT NOT NULL DEFAULT 'UNVERIFIED'")
     now = pd.Timestamp.now(tz="UTC").isoformat()
     defaults = {"initial_capital": "1000", "shadow_cost_bp": "10", "live_start_date": ""}
     for key, value in defaults.items():
@@ -107,13 +124,24 @@ def setting(conn, key, cast=str):
     return cast(row[0]) if row else None
 
 
-def set_setting(conn, key, value):
+def set_setting(conn, key, value, commit=True):
+    if key == "initial_capital":
+        decimal(value)
+    elif key == "shadow_cost_bp":
+        if decimal(value, zero=True) >= 5000:
+            raise SafetyError("INVALID_COST")
+    elif key == "live_start_date":
+        if value and (pd.isna(pd.Timestamp(value)) or str(pd.Timestamp(value).date()) != str(value)):
+            raise SafetyError("INVALID_START_DATE")
+    else:
+        raise SafetyError("UNKNOWN_SETTING")
     conn.execute(
         "INSERT INTO live_settings(key,value,updated_at) VALUES(?,?,?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
         (key, str(value), pd.Timestamp.now(tz="UTC").isoformat()),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def load_market(conn):
@@ -122,7 +150,7 @@ def load_market(conn):
         "SELECT date,value FROM fred_series WHERE series_id='T5YIE' ORDER BY date", conn, parse_dates=["date"]
     )
     prices = prices_long.pivot(index="date", columns="ticker", values="close").sort_index()
-    t5yie = fred.set_index("date")["value"].reindex(prices.index).ffill()
+    t5yie = fred.set_index("date")["value"].reindex(prices.index, method="ffill")
     return prices, t5yie
 
 
@@ -169,15 +197,30 @@ def next_session(date):
     return nyse_calendar().next_session(pd.Timestamp(date).tz_localize(None)).tz_localize(None)
 
 
-def freeze_signals(conn, code_version="live-v1"):
+def freeze_signals(conn, code_version="live-v2", now=None, commit=True):
+    issues = validate_market(conn, now=now)
+    if issues:
+        raise SafetyError("; ".join(i[2] for i in issues))
     prices, t5yie = load_market(conn)
     details = signal_details(prices, t5yie)
     live_start = setting(conn, "live_start_date")
     cutoff = pd.Timestamp(live_start) if live_start else details.index.max()
     details = details.loc[cutoff:]
-    now = pd.Timestamp.now(tz="UTC").isoformat()
+    current = utc(now)
+    now = current.isoformat()
     inserted = 0
+    fred = pd.read_sql("SELECT date,value FROM fred_series WHERE series_id='T5YIE' ORDER BY date", conn)
     for date, row in details.iterrows():
+        if not nyse_calendar().is_session(date) or nyse_calendar().session_close(date) + pd.Timedelta(minutes=15) > current:
+            continue
+        source = fred[fred.date <= date.strftime("%Y-%m-%d")]
+        if source.empty or (date - pd.Timestamp(source.iloc[-1].date)).days > 7:
+            continue
+        history = prices.loc[:date].to_json() + source.to_json()
+        digest = hashlib.sha256((history + code_version).encode()).hexdigest()
+        previous = conn.execute("SELECT input_hash FROM signal_provenance WHERE signal_date=?", (date.strftime("%Y-%m-%d"),)).fetchone()
+        if previous and previous[0] != digest:
+            conn.execute("INSERT OR IGNORE INTO signal_revisions VALUES(?,?,?)", (date.strftime("%Y-%m-%d"), digest, now))
         month_end = is_month_end_session(date)
         regime = (bool(row.growth_on), bool(row.inflation_on))
         weights = strategy.REGIME_POSITIONS[regime]
@@ -192,37 +235,69 @@ def freeze_signals(conn, code_version="live-v1"):
              int(row.inflation_on), "+".join(weights), json.dumps(weights, sort_keys=True),
              prices.index.max().strftime("%Y-%m-%d"), code_version),
         )
+        if cursor.rowcount:
+            conn.execute("INSERT INTO signal_provenance VALUES(?,?,?,?,?)",
+                         (date.strftime("%Y-%m-%d"), digest, source.iloc[-1].date, now, code_version))
         inserted += cursor.rowcount
-    conn.commit()
+    if commit:
+        conn.commit()
     return inserted
 
 
-def add_trade(conn, trade_date, ticker, side, quantity, price, fee=0, signal_date=None, note=""):
+@contextmanager
+def atomic(conn):
+    """Composable transaction without committing an outer transaction."""
+    conn.execute("SAVEPOINT manual_trade")
+    try:
+        yield
+        conn.execute("RELEASE SAVEPOINT manual_trade")
+    except BaseException:
+        conn.execute("ROLLBACK TO SAVEPOINT manual_trade")
+        conn.execute("RELEASE SAVEPOINT manual_trade")
+        raise
+
+
+def add_trade(conn, trade_date, ticker, side, quantity, price, fee=0, signal_date=None, note="", request_key=None, now=None):
     if ticker not in TRADE_TICKERS:
-        raise ValueError(f"Unsupported live ticker: {ticker}")
+        raise SafetyError("UNSUPPORTED_TICKER")
     side = side.upper()
     if side not in {"BUY", "SELL"}:
-        raise ValueError("side must be BUY or SELL")
-    conn.execute(
-        "INSERT INTO live_trades(signal_date,trade_date,ticker,side,quantity,price,fee,note,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)",
-        (signal_date, str(trade_date), ticker, side, float(quantity), float(price), float(fee), note,
-         pd.Timestamp.now(tz="UTC").isoformat()),
-    )
-    conn.commit()
+        raise SafetyError("INVALID_SIDE")
+    quantity, price, fee = decimal(quantity), decimal(price), decimal(fee, zero=True)
+    date = pd.Timestamp(trade_date)
+    if date.tzinfo is not None:
+        date = date.tz_convert("America/New_York").normalize().tz_localize(None)
+    if pd.isna(date) or date != date.normalize() or not nyse_calendar().is_session(date):
+        raise SafetyError("INVALID_TRADE_SESSION")
+    if date > utc(now).tz_convert("America/New_York").tz_localize(None).normalize():
+        raise SafetyError("FUTURE_TRADE")
+    values = (str(signal_date) if signal_date else None, str(date.date()), ticker, side,
+              float(quantity), float(price), float(fee), note)
+    key = request_key or hashlib.sha256(json.dumps(values).encode()).hexdigest()
+    with atomic(conn):
+        existing = conn.execute("SELECT signal_date,trade_date,ticker,side,quantity,price,fee,note FROM live_trades WHERE request_key=?", (key,)).fetchone()
+        if existing:
+            if existing != values:
+                raise SafetyError("REQUEST_KEY_CONFLICT")
+            return False
+        conn.execute(
+            "INSERT INTO live_trades(signal_date,trade_date,ticker,side,quantity,price,fee,note,created_at,request_key) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)", values + (utc(now).isoformat(), key))
+        rebuild_live_nav(conn, commit=False)
+    return True
 
 
 def _store_nav(conn, portfolio, nav):
     conn.execute("DELETE FROM live_daily_nav WHERE portfolio=?", (portfolio,))
     conn.executemany(
-        "INSERT INTO live_daily_nav(date,portfolio,equity,cash,daily_return,positions) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO live_daily_nav(date,portfolio,equity,cash,daily_return,positions,valuation_status) VALUES(?,?,?,?,?,?,?)",
         [(d.strftime("%Y-%m-%d"), portfolio, float(r.equity), float(r.cash),
-          None if pd.isna(r.daily_return) else float(r.daily_return), r.positions)
+          None if pd.isna(r.daily_return) else float(r.daily_return), r.positions, getattr(r, "valuation_status", "MODEL"))
          for d, r in nav.iterrows()],
     )
 
 
-def rebuild_shadow_and_benchmark(conn):
+def rebuild_shadow_and_benchmark(conn, commit=True):
     prices, _ = load_market(conn)
     live_start = setting(conn, "live_start_date")
     if not live_start:
@@ -270,17 +345,19 @@ def rebuild_shadow_and_benchmark(conn):
     bench["positions"] = json.dumps({"SPY": spy_shares})
     bench["daily_return"] = bench.equity.pct_change(fill_method=None)
     _store_nav(conn, "spy", bench)
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def rebuild_live_nav(conn):
+def rebuild_live_nav(conn, commit=True):
     prices, _ = load_market(conn)
     trades = pd.read_sql("SELECT * FROM live_trades ORDER BY trade_date,trade_id", conn, parse_dates=["trade_date"])
     if trades.empty:
         return
     initial = setting(conn, "initial_capital", float)
     start = trades.trade_date.min()
-    dates = prices.loc[start:].index
+    dates = prices.loc[start:].index.union(pd.DatetimeIndex(trades.trade_date).unique()).sort_values()
+    valuation = prices.reindex(prices.index.union(dates)).sort_index().ffill()
     cash, shares = initial, {t: 0.0 for t in TRADE_TICKERS}
     records = []
     for date in dates:
@@ -296,27 +373,66 @@ def rebuild_live_nav(conn):
                     raise ValueError(f"Insufficient shares for trade_id={trade.trade_id}")
                 cash += amount - trade.fee
                 shares[trade.ticker] -= trade.quantity
-        equity = cash + sum(shares[t] * prices.loc[date, t] for t in TRADE_TICKERS)
+        held = {t: q for t, q in shares.items() if q}
+        if any(t not in valuation or not np.isfinite(valuation.loc[date, t]) or valuation.loc[date, t] <= 0 for t in held):
+            raise SafetyError("VALUATION_PRICE_UNAVAILABLE")
+        equity = cash + sum(q * valuation.loc[date, t] for t, q in held.items())
         records.append((date, equity, cash, json.dumps(shares, sort_keys=True)))
     nav = pd.DataFrame(records, columns=["date", "equity", "cash", "positions"]).set_index("date")
     nav["daily_return"] = nav.equity.pct_change(fill_method=None)
+    nav["valuation_status"] = [
+        "CURRENT" if date in prices.index and all(t in prices and pd.notna(prices.loc[date, t])
+            for t, q in json.loads(row.positions).items() if q) else "CARRIED_FORWARD"
+        for date, row in nav.iterrows()]
     _store_nav(conn, "live", nav)
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def validate_market(conn):
+def validate_market(conn, now=None, fred_max_days=7):
     prices, t5yie = load_market(conn)
     issues = []
+    def error(code, message):
+        issues.append(("ERROR", code, message))
+    if prices.empty:
+        error("EMPTY_MARKET", "No market prices")
+        return issues
     required = set(TICKERS)
     missing = required - set(prices.columns)
     if missing:
-        issues.append(("ERROR", "MISSING_TICKER", f"Missing tickers: {sorted(missing)}"))
+        error("MISSING_TICKER", f"Missing tickers: {sorted(missing)}")
     last = prices.index.max()
     absent = [t for t in required & set(prices.columns) if pd.isna(prices.loc[last, t])]
     if absent:
-        issues.append(("ERROR", "INCOMPLETE_LATEST_DAY", f"Missing latest prices: {absent}"))
-    if pd.isna(t5yie.loc[last]):
-        issues.append(("ERROR", "MISSING_T5YIE", f"No T5YIE at or before {last.date()}"))
+        error("INCOMPLETE_LATEST_DAY", f"Missing latest prices: {absent}")
+    recent = prices.loc[:, sorted(required & set(prices.columns))].tail(260)
+    if len(recent) < 200:
+        error("INSUFFICIENT_HISTORY", "At least 200 sessions required")
+    elif recent.iloc[:-1].isna().any().any():
+        error("HISTORY_GAP", "Missing prices in signal lookback")
+    values = prices.to_numpy(dtype=float)
+    if np.isinf(values).any() or (values <= 0).any():
+        error("INVALID_PRICE", "Nonfinite or nonpositive market price")
+    current = utc(now)
+    cal = nyse_calendar()
+    expected_history = cal.sessions_in_range(recent.index.min(), recent.index.max())
+    if not expected_history.difference(recent.index).empty:
+        error("MISSING_SESSION", "Trading session missing from price history")
+    if not recent.index.difference(expected_history).empty:
+        error("INVALID_SESSION", "Non-session price rows")
+    if not np.isfinite(t5yie.dropna().to_numpy(dtype=float)).all():
+        error("INVALID_T5YIE", "Nonfinite economic observation")
+    sessions = cal.sessions_in_range(current.tz_localize(None).normalize() - pd.Timedelta(days=14), current.tz_localize(None).normalize())
+    completed = [d for d in sessions if cal.session_close(d) + pd.Timedelta(minutes=15) <= current]
+    if not completed or last < completed[-1]:
+        error("STALE_PRICES", "Latest completed session prices unavailable")
+    if last > current.tz_convert("America/New_York").tz_localize(None).normalize():
+        error("FUTURE_PRICES", "Future market date")
+    source = conn.execute("SELECT date,value FROM fred_series WHERE series_id='T5YIE' AND date<=? ORDER BY date DESC LIMIT 1", (last.strftime("%Y-%m-%d"),)).fetchone()
+    if source is None or pd.isna(t5yie.loc[last]):
+        error("MISSING_T5YIE", "No T5YIE observation")
+    elif not np.isfinite(source[1]) or (last - pd.Timestamp(source[0])).days > fred_max_days:
+        error("STALE_T5YIE", "T5YIE observation stale or invalid")
     return issues
 
 
@@ -328,9 +444,25 @@ def backup_database(conn, db_path=DEFAULT_DB, keep=7):
     destination = sqlite3.connect(target)
     try:
         conn.backup(destination)
+        if destination.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_accounts'").fetchone():
+            destination.execute("UPDATE broker_accounts SET stopped=1,reconciled=0")
+            destination.commit()
+        if destination.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise SafetyError("BACKUP_INVALID")
     finally:
         destination.close()
     backups = sorted(backup_dir.glob(f"{db_path.stem}_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in backups[keep:]:
         old.unlink()
     return target
+
+
+def save_live_settings(conn, start, initial, cost, now=None):
+    """Settings, derived portfolios and signal changes succeed or fail together."""
+    with atomic(conn):
+        set_setting(conn, "live_start_date", start, commit=False)
+        set_setting(conn, "initial_capital", initial, commit=False)
+        set_setting(conn, "shadow_cost_bp", cost, commit=False)
+        freeze_signals(conn, now=now, commit=False)
+        rebuild_shadow_and_benchmark(conn, commit=False)
+        rebuild_live_nav(conn, commit=False)

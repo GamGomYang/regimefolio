@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 import sqlite3
 import sys
 from pathlib import Path
@@ -39,24 +40,23 @@ with st.expander("테스트 설정", expanded=not bool(start)):
         new_initial = st.number_input("초기자금", min_value=1.0, value=float(initial), step=100.0)
         new_cost = st.number_input("Shadow 편도비용(bp)", min_value=0.0, value=float(cost), step=1.0)
         if st.form_submit_button("설정 저장"):
-            with sqlite3.connect(live_core.DEFAULT_DB) as conn:
-                live_core.initialize(conn)
-                live_core.set_setting(conn, "live_start_date", new_start.isoformat())
-                live_core.set_setting(conn, "initial_capital", new_initial)
-                live_core.set_setting(conn, "shadow_cost_bp", new_cost)
-                live_core.freeze_signals(conn)
-                live_core.rebuild_shadow_and_benchmark(conn)
-            st.success("설정을 저장했습니다.")
-            st.rerun()
+            try:
+                with sqlite3.connect(live_core.DEFAULT_DB) as conn:
+                    live_core.initialize(conn)
+                    live_core.save_live_settings(conn, new_start.isoformat(), new_initial, new_cost)
+                st.success("설정을 저장했습니다.")
+                st.rerun()
+            except Exception:
+                st.error("설정을 적용하지 못했습니다. 데이터 최신성과 기존 거래 잔고를 확인하세요.")
 
 runs = read("SELECT * FROM live_runs ORDER BY run_id DESC LIMIT 30", dates=("started_at", "finished_at"))
-signals = read("SELECT * FROM live_signal_snapshots ORDER BY signal_date", dates=("signal_date",))
+signals = read("SELECT s.*, p.confirmed_at FROM live_signal_snapshots s LEFT JOIN signal_provenance p USING(signal_date) ORDER BY signal_date", dates=("signal_date",))
 nav = read("SELECT * FROM live_daily_nav ORDER BY date", dates=("date",))
 trades = read("SELECT * FROM live_trades ORDER BY trade_date,trade_id", dates=("trade_date",))
 
 last_run = runs.iloc[0] if not runs.empty else None
 last_signal = signals.iloc[-1] if not signals.empty else None
-month_end = signals[signals.is_month_end == 1]
+month_end = signals[(signals.is_month_end == 1) & signals.confirmed_at.notna()]
 last_month_end = month_end.iloc[-1] if not month_end.empty else None
 
 cols = st.columns(4)
@@ -89,7 +89,10 @@ if not nav.empty:
     )
     st.plotly_chart(fig, width="stretch", config={"responsive": True, "displayModeBar": False})
 
+st.caption("토스증권 실주문 전송은 비활성화되어 있습니다. 아래 입력은 수동 거래 기록입니다.")
 st.subheader("실제 거래 입력")
+if "manual_trade_key" not in st.session_state:
+    st.session_state.manual_trade_key = str(uuid.uuid4())
 with st.form("trade"):
     c1, c2, c3 = st.columns(3)
     trade_date = c1.date_input("거래일", value=pd.Timestamp.now().date())
@@ -105,12 +108,12 @@ with st.form("trade"):
         try:
             with sqlite3.connect(live_core.DEFAULT_DB) as conn:
                 live_core.initialize(conn)
-                live_core.add_trade(conn, trade_date, ticker, side, quantity, price, fee, signal_date, note)
-                live_core.rebuild_live_nav(conn)
+                live_core.add_trade(conn, trade_date, ticker, side, quantity, price, fee, signal_date, note, request_key=st.session_state.manual_trade_key)
+            st.session_state.manual_trade_key = str(uuid.uuid4())
             st.success("거래와 실제 NAV를 저장했습니다.")
             st.rerun()
         except Exception as exc:
-            st.error(str(exc))
+            st.error(f"거래를 저장하지 못했습니다 ({type(exc).__name__}). 입력값·잔고·평가 데이터를 확인하세요.")
 
 if not trades.empty:
     st.dataframe(trades, width="stretch", hide_index=True)
